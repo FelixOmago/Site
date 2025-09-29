@@ -1,5 +1,4 @@
 <!doctype html>
-
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
@@ -19,7 +18,7 @@
     button,select{background:#1f2937;color:#e6eef8;border:0;padding:8px 10px;border-radius:6px}
     button.secondary{background:transparent;border:1px solid rgba(230,238,248,0.06)}
     ul{list-style:none;padding:0;margin:0;max-height:60vh;overflow:auto}
-    li{padding:8px;border-bottom:1px dashed rgba(230,238,248,0.04);display:flex;justify-content:space-between;gap:8px}
+    li{padding:8px;border-bottom:1px dashed rgba(230,238,248,0.04);display:flex;justify-content:space-between;gap:8px;align-items:center}
     .small{font-size:.875rem;color:#9fb0c8}
     .badge{background:rgba(16,185,129,0.12);padding:4px 8px;border-radius:999px;color:#a7f3d0}
     footer{font-size:.9rem;color:#97a6b6}
@@ -29,7 +28,8 @@
   <header>
     <h1>Scanner de Código de Barras — Exportador</h1>
     <div class="small">Use a câmera do celular para escanear. Os códigos são salvos e podem ser baixados.</div>
-  </header>  <main>
+  </header>  
+  <main>
     <section class="card">
       <div id="videoWrap">
         <video id="video" autoplay playsinline></video>
@@ -39,32 +39,33 @@
             <div style="margin-top:6px" class="badge" id="status">Pronto</div>
           </div>
         </div>
-      </div><div style="margin-top:12px" class="controls">
-    <select id="cameraSelect"></select>
-    <button id="startBtn">Iniciar câmera</button>
-    <button id="stopBtn" class="secondary">Parar</button>
-    <button id="clearBtn" class="secondary">Limpar lista</button>
-  </div>
+      </div>
+      <div style="margin-top:12px" class="controls">
+        <select id="cameraSelect"></select>
+        <button id="startBtn">Iniciar câmera</button>
+        <button id="stopBtn" class="secondary">Parar</button>
+        <button id="clearBtn" class="secondary">Limpar lista</button>
+        <button id="manualBtn" class="secondary">Adicionar código manual</button>
+      </div>
+      <div style="margin-top:12px;text-align:center" class="small">Detectores usados: <span id="detectorInfo">Detectando suporte...</span></div>
+    </section>
 
-  <div style="margin-top:12px;text-align:center" class="small">Detectores usados: <span id="detectorInfo">Detectando suporte...</span></div>
-</section>
+    <aside class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong>Escaneados</strong>
+        <div style="display:flex;gap:8px">
+          <button id="exportCsv">Exportar .csv</button>
+          <button id="exportTxt" class="secondary">Exportar .txt</button>
+        </div>
+      </div>
 
-<aside class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-    <strong>Escaneados</strong>
-    <div style="display:flex;gap:8px">
-      <button id="exportCsv">Exportar .csv</button>
-      <button id="exportTxt" class="secondary">Exportar .txt</button>
-    </div>
-  </div>
+      <ul id="scannedList" aria-live="polite"></ul>
+      <div style="margin-top:10px" class="small">Total: <span id="total">0</span></div>
+    </aside>
+  </main>  
+  <footer class="small card">Funciona melhor em navegadores modernos (Chrome/Edge/Firefox no Android). Se o seu navegador não suportar a API nativa, tentaremos usar uma biblioteca como fallback.</footer>  
 
-  <ul id="scannedList" aria-live="polite"></ul>
-
-  <div style="margin-top:10px" class="small">Total: <span id="total">0</span></div>
-</aside>
-
-  </main>  <footer class="small card">Funciona melhor em navegadores modernos (Chrome/Edge/Firefox no Android). Se o seu navegador não suportar a API nativa, tentaremos usar uma biblioteca como fallback.</footer>  <script>
-    // Lista de códigos escaneados
+  <script>
     const codes = [];
     const video = document.getElementById('video');
     const startBtn = document.getElementById('startBtn');
@@ -74,6 +75,8 @@
     const totalSpan = document.getElementById('total');
     const detectorInfo = document.getElementById('detectorInfo');
     const status = document.getElementById('status');
+    const clearBtn = document.getElementById('clearBtn');
+    const manualBtn = document.getElementById('manualBtn');
 
     let stream = null;
     let scanning = false;
@@ -125,13 +128,23 @@
     }
 
     function addCode(code){
-      // Evita duplicatas consecutivas; permite múltiplas vezes se escanear novamente depois
       if(codes.length && codes[codes.length-1] === code) return;
       codes.push(code);
       const li = document.createElement('li');
-      li.innerHTML = `<span>${code}</span><button class="secondary" style="margin-left:8px">Copiar</button>`;
-      const btn = li.querySelector('button');
-      btn.addEventListener('click',()=>navigator.clipboard.writeText(code));
+      li.innerHTML = `<span>${code}</span>
+                      <div style="display:flex;gap:4px">
+                        <button class="secondary copyBtn">Copiar</button>
+                        <button class="secondary removeBtn">Remover</button>
+                      </div>`;
+      const copyBtn = li.querySelector('.copyBtn');
+      copyBtn.addEventListener('click',()=>navigator.clipboard.writeText(code));
+      const removeBtn = li.querySelector('.removeBtn');
+      removeBtn.addEventListener('click',()=>{
+        const index = codes.indexOf(code);
+        if(index>-1) codes.splice(index,1);
+        li.remove();
+        totalSpan.textContent = codes.length;
+      });
       scannedList.prepend(li);
       totalSpan.textContent = codes.length;
     }
@@ -146,7 +159,6 @@
 
     document.getElementById('exportCsv').addEventListener('click',()=>{
       if(codes.length===0){alert('Nenhum código escaneado');return}
-      // CSV simples: cada código em nova linha
       const csv = codes.join('\n');
       exportAs('codigos.csv', csv);
     });
@@ -155,21 +167,21 @@
       exportAs('codigos.txt', codes.join('\n'));
     });
 
-    document.getElementById('clearBtn').addEventListener('click',()=>{
+    clearBtn.addEventListener('click',()=>{
       if(!confirm('Limpar lista de códigos?')) return;
       codes.length = 0;
       scannedList.innerHTML = '';
       totalSpan.textContent = '0';
     });
 
-    startBtn.addEventListener('click', ()=>{
-      startCamera();
-    });
-    stopBtn.addEventListener('click', ()=>{
-      stopCamera();
+    manualBtn.addEventListener('click',()=>{
+      const manualCode = prompt('Digite o código manualmente:');
+      if(manualCode) addCode(manualCode.trim());
     });
 
-    // ----- DETECÇÃO -----
+    startBtn.addEventListener('click', startCamera);
+    stopBtn.addEventListener('click', stopCamera);
+
     async function initDetector(){
       if('BarcodeDetector' in window){
         const supported = await BarcodeDetector.getSupportedFormats();
@@ -182,7 +194,6 @@
       }
     }
 
-    // loop de captura + detecção usando BarcodeDetector
     async function startDetectionLoop(){
       const mode = await initDetector();
       if(mode === 'native'){
@@ -200,14 +211,11 @@
                 if(b.rawValue) addCode(b.rawValue);
               });
             }
-          }catch(e){
-            console.error('detector error', e);
-          }
+          }catch(e){ console.error('detector error', e); }
           rafId = requestAnimationFrame(frame);
         }
         rafId = requestAnimationFrame(frame);
       }else{
-        // fallback com QuaggaJS (CDN). Carrega dinamicamente se necessário
         if(!window.Quagga){
           const s = document.createElement('script');
           s.src = 'https://unpkg.com/quagga@0.12.1/dist/quagga.min.js';
@@ -215,20 +223,12 @@
           s.onerror = ()=>{ alert('Falha ao carregar biblioteca de fallback. Use um navegador moderno com BarcodeDetector.'); };
           document.head.appendChild(s);
         }else startQuagga();
-
         function startQuagga(){
           Quagga.init({
-            inputStream: {
-              name: 'Live',
-              type: 'LiveStream',
-              target: video, // Quagga irá injetar o stream
-              constraints: { facingMode: 'environment' }
-            },
+            inputStream: { name: 'Live', type: 'LiveStream', target: video, constraints: { facingMode: 'environment' } },
             decoder: { readers: ['ean_reader','ean_8_reader','code_128_reader','upc_reader','upc_e_reader'] }
           }, function(err){
-            if(err){
-              console.error(err); alert('Quagga init falhou'); return;
-            }
+            if(err){ console.error(err); alert('Quagga init falhou'); return; }
             Quagga.onDetected(function(result){
               const code = result.codeResult && result.codeResult.code;
               if(code) addCode(code);
@@ -239,18 +239,15 @@
       }
     }
 
-    // Inicialização
     (async function(){
       await enumerateCameras();
-      // tenta selecionar a câmera com "back" no label (Android) se houver
       for(let i=0;i<cameraSelect.options.length;i++){
         const opt = cameraSelect.options[i];
         if(/rear|back|environment|traseira/i.test(opt.text)) { cameraSelect.selectedIndex = i; break; }
       }
-      // atualiza opções quando mudam
       navigator.mediaDevices && navigator.mediaDevices.addEventListener && navigator.mediaDevices.addEventListener('devicechange', enumerateCameras);
       detectorInfo.textContent = 'Pronto';
     })();
-
-  </script></body>
+  </script>
+</body>
 </html>
