@@ -1,0 +1,256 @@
+<!doctype html>
+
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Scanner de Código de Barras — Exportador</title>
+  <style>
+    :root{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;font-size:16px}
+    body{margin:0;background:#0f1720;color:#e6eef8;display:flex;flex-direction:column;gap:12px;min-height:100vh;padding:14px}
+    header{display:flex;align-items:center;gap:12px}
+    h1{font-size:1.1rem;margin:0}
+    main{display:grid;grid-template-columns:1fr 320px;gap:12px;align-items:start}
+    .card{background:rgba(255,255,255,0.03);padding:12px;border-radius:8px;box-shadow:0 4px 18px rgba(2,6,23,0.6)}
+    #videoWrap{position:relative;overflow:hidden;border-radius:8px}
+    video{width:100%;height:auto;background:#000;display:block}
+    #overlay{position:absolute;inset:0;pointer-events:none;display:flex;align-items:center;justify-content:center}
+    .controls{display:flex;gap:8px;flex-wrap:wrap}
+    button,select{background:#1f2937;color:#e6eef8;border:0;padding:8px 10px;border-radius:6px}
+    button.secondary{background:transparent;border:1px solid rgba(230,238,248,0.06)}
+    ul{list-style:none;padding:0;margin:0;max-height:60vh;overflow:auto}
+    li{padding:8px;border-bottom:1px dashed rgba(230,238,248,0.04);display:flex;justify-content:space-between;gap:8px}
+    .small{font-size:.875rem;color:#9fb0c8}
+    .badge{background:rgba(16,185,129,0.12);padding:4px 8px;border-radius:999px;color:#a7f3d0}
+    footer{font-size:.9rem;color:#97a6b6}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Scanner de Código de Barras — Exportador</h1>
+    <div class="small">Use a câmera do celular para escanear. Os códigos são salvos e podem ser baixados.</div>
+  </header>  <main>
+    <section class="card">
+      <div id="videoWrap">
+        <video id="video" autoplay playsinline></video>
+        <div id="overlay">
+          <div style="padding:8px;background:rgba(0,0,0,0.35);border-radius:8px;text-align:center">
+            <div class="small">Aponte a câmera para um código de barras</div>
+            <div style="margin-top:6px" class="badge" id="status">Pronto</div>
+          </div>
+        </div>
+      </div><div style="margin-top:12px" class="controls">
+    <select id="cameraSelect"></select>
+    <button id="startBtn">Iniciar câmera</button>
+    <button id="stopBtn" class="secondary">Parar</button>
+    <button id="clearBtn" class="secondary">Limpar lista</button>
+  </div>
+
+  <div style="margin-top:12px;text-align:center" class="small">Detectores usados: <span id="detectorInfo">Detectando suporte...</span></div>
+</section>
+
+<aside class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <strong>Escaneados</strong>
+    <div style="display:flex;gap:8px">
+      <button id="exportCsv">Exportar .csv</button>
+      <button id="exportTxt" class="secondary">Exportar .txt</button>
+    </div>
+  </div>
+
+  <ul id="scannedList" aria-live="polite"></ul>
+
+  <div style="margin-top:10px" class="small">Total: <span id="total">0</span></div>
+</aside>
+
+  </main>  <footer class="small card">Funciona melhor em navegadores modernos (Chrome/Edge/Firefox no Android). Se o seu navegador não suportar a API nativa, tentaremos usar uma biblioteca como fallback.</footer>  <script>
+    // Lista de códigos escaneados
+    const codes = [];
+    const video = document.getElementById('video');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const cameraSelect = document.getElementById('cameraSelect');
+    const scannedList = document.getElementById('scannedList');
+    const totalSpan = document.getElementById('total');
+    const detectorInfo = document.getElementById('detectorInfo');
+    const status = document.getElementById('status');
+
+    let stream = null;
+    let scanning = false;
+    let track = null;
+    let barcodeDetector = null;
+    let rafId = null;
+
+    async function enumerateCameras(){
+      try{
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cams = devices.filter(d=>d.kind==='videoinput');
+        cameraSelect.innerHTML = '';
+        cams.forEach((c,i)=>{
+          const option = document.createElement('option');
+          option.value = c.deviceId;
+          option.textContent = c.label || `Câmera ${i+1}`;
+          cameraSelect.appendChild(option);
+        });
+      }catch(e){
+        console.warn('Erro ao enumerar câmeras', e);
+      }
+    }
+
+    async function startCamera(){
+      const deviceId = cameraSelect.value || undefined;
+      const constraints = {video:{deviceId:deviceId?{exact:deviceId}:{},facingMode:'environment'}};
+      try{
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        track = stream.getVideoTracks()[0];
+        scanning = true;
+        status.textContent = 'Escaneando...';
+        startDetectionLoop();
+      }catch(e){
+        console.error(e);
+        alert('Não foi possível acessar a câmera. Verifique permissões.');
+      }
+    }
+
+    function stopCamera(){
+      scanning = false;
+      status.textContent = 'Parado';
+      if(rafId) cancelAnimationFrame(rafId);
+      if(stream){
+        stream.getTracks().forEach(t=>t.stop());
+        stream = null;
+      }
+      video.srcObject = null;
+    }
+
+    function addCode(code){
+      // Evita duplicatas consecutivas; permite múltiplas vezes se escanear novamente depois
+      if(codes.length && codes[codes.length-1] === code) return;
+      codes.push(code);
+      const li = document.createElement('li');
+      li.innerHTML = `<span>${code}</span><button class="secondary" style="margin-left:8px">Copiar</button>`;
+      const btn = li.querySelector('button');
+      btn.addEventListener('click',()=>navigator.clipboard.writeText(code));
+      scannedList.prepend(li);
+      totalSpan.textContent = codes.length;
+    }
+
+    function exportAs(filename, text){
+      const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    document.getElementById('exportCsv').addEventListener('click',()=>{
+      if(codes.length===0){alert('Nenhum código escaneado');return}
+      // CSV simples: cada código em nova linha
+      const csv = codes.join('\n');
+      exportAs('codigos.csv', csv);
+    });
+    document.getElementById('exportTxt').addEventListener('click',()=>{
+      if(codes.length===0){alert('Nenhum código escaneado');return}
+      exportAs('codigos.txt', codes.join('\n'));
+    });
+
+    document.getElementById('clearBtn').addEventListener('click',()=>{
+      if(!confirm('Limpar lista de códigos?')) return;
+      codes.length = 0;
+      scannedList.innerHTML = '';
+      totalSpan.textContent = '0';
+    });
+
+    startBtn.addEventListener('click', ()=>{
+      startCamera();
+    });
+    stopBtn.addEventListener('click', ()=>{
+      stopCamera();
+    });
+
+    // ----- DETECÇÃO -----
+    async function initDetector(){
+      if('BarcodeDetector' in window){
+        const supported = await BarcodeDetector.getSupportedFormats();
+        detectorInfo.textContent = 'API nativa: ' + supported.join(', ');
+        barcodeDetector = new BarcodeDetector({formats: supported});
+        return 'native';
+      }else{
+        detectorInfo.textContent = 'API nativa não disponível — fallback Quagga (pode pedir lib externa)';
+        return 'fallback';
+      }
+    }
+
+    // loop de captura + detecção usando BarcodeDetector
+    async function startDetectionLoop(){
+      const mode = await initDetector();
+      if(mode === 'native'){
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        async function frame(){
+          if(!scanning || !video.videoWidth) { rafId = requestAnimationFrame(frame); return; }
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video,0,0,canvas.width,canvas.height);
+          try{
+            const barcodes = await barcodeDetector.detect(canvas);
+            if(barcodes && barcodes.length){
+              barcodes.forEach(b=>{
+                if(b.rawValue) addCode(b.rawValue);
+              });
+            }
+          }catch(e){
+            console.error('detector error', e);
+          }
+          rafId = requestAnimationFrame(frame);
+        }
+        rafId = requestAnimationFrame(frame);
+      }else{
+        // fallback com QuaggaJS (CDN). Carrega dinamicamente se necessário
+        if(!window.Quagga){
+          const s = document.createElement('script');
+          s.src = 'https://unpkg.com/quagga@0.12.1/dist/quagga.min.js';
+          s.onload = ()=>{ startQuagga(); };
+          s.onerror = ()=>{ alert('Falha ao carregar biblioteca de fallback. Use um navegador moderno com BarcodeDetector.'); };
+          document.head.appendChild(s);
+        }else startQuagga();
+
+        function startQuagga(){
+          Quagga.init({
+            inputStream: {
+              name: 'Live',
+              type: 'LiveStream',
+              target: video, // Quagga irá injetar o stream
+              constraints: { facingMode: 'environment' }
+            },
+            decoder: { readers: ['ean_reader','ean_8_reader','code_128_reader','upc_reader','upc_e_reader'] }
+          }, function(err){
+            if(err){
+              console.error(err); alert('Quagga init falhou'); return;
+            }
+            Quagga.onDetected(function(result){
+              const code = result.codeResult && result.codeResult.code;
+              if(code) addCode(code);
+            });
+            Quagga.start();
+          });
+        }
+      }
+    }
+
+    // Inicialização
+    (async function(){
+      await enumerateCameras();
+      // tenta selecionar a câmera com "back" no label (Android) se houver
+      for(let i=0;i<cameraSelect.options.length;i++){
+        const opt = cameraSelect.options[i];
+        if(/rear|back|environment|traseira/i.test(opt.text)) { cameraSelect.selectedIndex = i; break; }
+      }
+      // atualiza opções quando mudam
+      navigator.mediaDevices && navigator.mediaDevices.addEventListener && navigator.mediaDevices.addEventListener('devicechange', enumerateCameras);
+      detectorInfo.textContent = 'Pronto';
+    })();
+
+  </script></body>
+</html>
